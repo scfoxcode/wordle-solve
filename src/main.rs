@@ -1,6 +1,9 @@
+use std::thread;
 use std::io;
 use std::time::{Duration, SystemTime};
 use std::collections::HashMap;
+use std::sync::mpsc;
+
 // static WORD_FILE: &'static str = include_str!("./wordlist-debug.txt");
 static WORD_FILE: &'static str = include_str!("./wordlist.txt");
 
@@ -111,60 +114,79 @@ fn get_words() -> Vec<&'static str> {
     final_words 
 }
 
+fn create_worker(raw_words: Vec<&'static str>, chunk: usize, num_chunks: usize, sender: mpsc::Sender<GuessQuality>) -> thread::JoinHandle<()> {
+    let words = raw_words.clone();
+
+    let chunk_size = words.len() / num_chunks;
+
+
+    // Window into larger words list
+    let window = raw_words[(chunk * chunk_size)..(chunk_size * (chunk+1))].to_vec();
+
+
+    thread::spawn(move || {
+        let mut first = GuessQuality::new();
+
+        for (i, guess) in window.iter().enumerate() {
+            let mut quality = GuessQuality::new();
+            quality.guess_index = i;
+
+            //for j in 0..words.len() {
+                //let answer = words[j];
+            for answer in &words {
+                let result = valid_remaining(guess, answer, &words);            
+                if result < quality.lowest {
+                    quality.lowest = result;
+                }
+                if result > quality.highest {
+                    quality.highest = result;
+                }
+                quality.average += result;
+            }
+            // quality.average = quality.average / (words.len() * words.len());
+            // quality.average = quality.average; // The actual avg doesn't even matter. Lowest sum wins
+            quality.average = quality.average / 10000;
+            if quality.average < first.average {
+                first = quality.clone();
+            }
+        }
+
+        sender.send(first).unwrap();
+    })
+}
+
 fn main() {
     let start = SystemTime::now();
-    let mut words = get_words(); 
-    println!("Hello, world!");
-    println!("Num words {}", words.len());
+    let thread_count = 8;
 
-    //prompt_user_for_new_state();
-    
-    // Use every word as a guess, and for each guess,
-    // look at how many valid words would remain for each possible answer
-    // This should give some insight into good starting guesses
-
+    let words: Vec<&'static str> = get_words(); 
+    println!("Number of words in reduced list {}", words.len());
     println!("Beginning Brutal calculation");
 
-    let mut first = GuessQuality::new();
-    let mut second = GuessQuality::new();
-    let mut third = GuessQuality::new();
-    let mut fourth = GuessQuality::new();
-    let mut fifth = GuessQuality::new();
-
-    for i in 0..words.len() {
-        let guess = words[i];
-        let mut quality = GuessQuality::new();
-        quality.guess_index = i;
-
-        for j in 0..words.len() {
-            let answer = words[j];
-            let result = valid_remaining(guess, answer, &words);            
-            if result < quality.lowest {
-                quality.lowest = result;
-            }
-            if result > quality.highest {
-                quality.highest = result;
-            }
-            quality.average += result;
-        }
-        // quality.average = quality.average / (words.len() * words.len());
-        // quality.average = quality.average; // The actual avg doesn't even matter. Lowest sum wins
-        quality.average = quality.average / 10000;
-        if quality.average < first.average {
-            fifth = fourth;
-            fourth = third;
-            third = second;
-            second = first;
-            first = quality.clone();
-        }
+    let (tx, rx): (mpsc::Sender<GuessQuality>, mpsc::Receiver<GuessQuality>) = mpsc::channel();
+    let mut handles = vec![];
+    for i in 0..thread_count {
+        let tx_clone = tx.clone();
+        let words_clone = words.clone();
+        handles.push(
+            create_worker(
+                words_clone,
+                i,
+                thread_count,
+                tx_clone
+            )
+        );
     }
 
-    first.print(&words);
-    second.print(&words);
-    third.print(&words);
-    fourth.print(&words);
-    fifth.print(&words);
-    // best_lowest.print(&words);
+    // Results from threads
+    for _ in 0..thread_count {
+        let quality = rx.recv().unwrap();
+        quality.print(&words);
+    }
+    
+    for handle in handles {
+        handle.join().unwrap();
+    }
     
     match start.elapsed() {
         Ok(elapsed) => {
@@ -174,5 +196,6 @@ fn main() {
             println!("Error: {e:?}");
         }
     }
+
 
 }

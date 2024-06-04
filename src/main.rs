@@ -93,9 +93,13 @@ fn get_words() -> Vec<&'static str> {
     let mut count = 0;
     for word in words.iter() {
         count += 1;
+        // OPTIMISATION TO PREVENT CORES MELTING. It's now going to take 8 times longer
+        // Multi threading a must for this.
+        /*
         if count % 2 == 1 {
             continue;
         }
+        */
         let mut chars_in_word: HashMap<char, bool> = HashMap::new();
         let mut valid = true;
         for i in 0..5 {
@@ -131,8 +135,6 @@ fn create_worker(raw_words: Vec<&'static str>, chunk: usize, num_chunks: usize, 
             let mut quality = GuessQuality::new();
             quality.guess_index = i;
 
-            //for j in 0..words.len() {
-                //let answer = words[j];
             for answer in &words {
                 let result = valid_remaining(guess, answer, &words);            
                 if result < quality.lowest {

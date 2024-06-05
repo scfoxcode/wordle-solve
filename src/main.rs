@@ -164,6 +164,7 @@ fn create_worker(
                 third.guess = guess.to_string();
             }
 
+            /*
 
             // Check specific guess
             if guess.to_string() == "slate" {
@@ -178,20 +179,18 @@ fn create_worker(
             if guess.to_string() == "soare" {
                 println!("Soare score = {}", total);
             }
+            */
         }
 
         sender.send(vec![first, second, third]).unwrap();
     })
 }
 
-fn main() {
-    let start = SystemTime::now();
-    let thread_count = 8;
-
-    let words: Vec<&'static str> = get_words(); 
-    let answers: Vec<&'static str> = get_answers(); 
-    println!("Welcome to the Wordle solver");
-
+fn best_starting_guesses(
+    thread_count: i32,
+    words: &Vec<&'static str>,
+    answers: &Vec<&'static str>
+    ) -> Vec<Guess> {
     let (tx, rx): (mpsc::Sender<Vec<Guess>>, mpsc::Receiver<Vec<Guess>>) = mpsc::channel();
     let mut handles = vec![];
 
@@ -203,8 +202,8 @@ fn main() {
             create_worker(
                 words_clone,
                 answers_clone,
-                i,
-                thread_count,
+                i as usize,
+                thread_count as usize,
                 tx_clone
             )
         );
@@ -217,15 +216,41 @@ fn main() {
         top_results.append(&mut quality);
     }
 
-    top_results.sort_by(|a, b| b.score.partial_cmp(&a.score).expect("I HATE FLOATS"));
-    
     for handle in handles {
         handle.join().unwrap();
     }
 
-    for result in top_results {
-        result.print();
+    top_results.sort_by(|a, b| b.score.partial_cmp(&a.score).expect("I HATE FLOATS"));
+    top_results
+}
+
+fn main() {
+    let start = SystemTime::now();
+    let thread_count = 16;
+
+    let words: Vec<&'static str> = get_words(); 
+    let answers: Vec<&'static str> = get_answers(); 
+    println!("Welcome to the Wordle solver\n");
+
+    let top_results = best_starting_guesses(thread_count, &words, &answers);
+    println!("Our analysis shows that the following are all great starting guesses\n");
+    let mut count = 0;
+    while count < 17 {
+        if top_results.len() > count {
+            println!(
+                "{}, {}, {}, {}",
+                top_results[count].guess,
+                top_results[count + 1].guess,
+                top_results[count + 2].guess,
+                top_results[count + 3].guess,
+            );
+        }
+        count += 4;
     }
+
+    println!("\nPlay wordle using one of these, then enter the information you learn after each guess");
+    
+
     
     match start.elapsed() {
         Ok(elapsed) => {

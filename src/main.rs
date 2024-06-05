@@ -3,6 +3,7 @@ use std::io;
 use std::time::{Duration, SystemTime};
 use std::collections::HashMap;
 use std::sync::mpsc;
+use regex::Regex;
 
 mod freq;
 use freq::FrequencyDistribution;
@@ -14,18 +15,122 @@ use freq::Distribution;
 static WORD_FILE: &'static str = include_str!("./wordlist-raw.txt");
 static ANSWERS_FILE: &'static str = include_str!("./answers.txt");
 
-fn prompt_user_for_new_state() {
+// This needs to be smarter, as in exists but not in pos X
+#[derive(Clone)] 
+struct CurrentInfo {
+    pub exists: Vec<char>,
+    pub excluded: Vec<char>,
+    pub known: [Option<char>; 5]
+}
+
+impl CurrentInfo {
+    fn new() -> Self {
+        Self {
+            exists: Vec::new(),
+            excluded: Vec::new(),
+            known: [None; 5],
+        }
+    }
+}
+
+fn prompt_user_for_new_state() -> CurrentInfo {
+    let mut info = CurrentInfo::new();
     let mut known_letters_raw = String::new();
-    println!(
-        "Please provide known letter \
-        locations eg: 1a !4b. This means \
-        we have the letter 'a' in slot 1, \
-        and we have the letter 'b', but not in slot 4");
+
+    println!("Please provide information about the current game state");
+    println!("All information should be separated by spaces...");
+    println!("- Eg: For the letter 'a' in position 2, enter 2a");
+    println!("- Eg: For the letter 'd' in an unknown position, enter d");
+    println!("- Eg: If letter 'c' does not exist, enter !c");
+    println!("Full example: 1r 4s e t !x !p !r !y");
 
     io::stdin().read_line(&mut known_letters_raw)
         .expect("failed to read known letters");
 
-    println!("The input: {}", known_letters_raw);
+    let inputs: Vec<&str> = known_letters_raw.split_whitespace().collect();
+    println!("Inputs {:?}", inputs);
+    for input in inputs {
+        let known = r"^([1-5])([a-z])";
+        let somewhere = r"^([a-z])";
+        let exclude = r"^\!([a-z])";
+
+        let mut regex = Regex::new(known).unwrap();
+
+        // Ugh, this feels ugly
+        if let Some(captures) = regex.captures(input) {
+            if let Some(position) = captures.get(1) {
+                if let Some(letter) = captures.get(2) {
+                    // This might crash into next week with all these unwraps
+                    let pos: usize = position.as_str().parse::<usize>().unwrap() - 1;
+                    let letter: &str = letter.as_str();
+                    info.known[pos] = letter.chars().nth(0); // Sneaky double use of option here
+                }
+            }
+        }
+
+        regex = Regex::new(somewhere).unwrap();
+        if let Some(captures) = regex.captures(input) {
+            if let Some(letter) = captures.get(1) {
+                let letter: &str = letter.as_str();
+                info.exists.push(letter.chars().nth(0).unwrap());
+            }
+        }
+
+        regex = Regex::new(exclude).unwrap();
+        if let Some(captures) = regex.captures(input) {
+            if let Some(letter) = captures.get(1) {
+                let letter: &str = letter.as_str();
+                info.excluded.push(letter.chars().nth(0).unwrap());
+            }
+        }
+        
+    }
+
+    info
+}
+
+fn possible_remaining_answers(
+    answers: &Vec<&'static str>,
+    info: &CurrentInfo,
+    ) -> Vec<&'static str> {
+
+    let mut remaining: Vec<&'static str> = Vec::new();
+    for answer in answers.iter() {
+        if answer.to_string() == "slate" {
+            println!("YOLO");
+            println!("{:?}", info.excluded);
+            println!("{:?}", info.exists);
+            println!("{:?}", info.known);
+        }
+        let mut valid = true;
+        for letter in info.excluded.iter() {
+            if answer.contains(*letter) {
+                valid = false;
+                break;
+            }
+        }
+
+        for letter in info.exists.iter() {
+            if !answer.contains(*letter) {
+                valid = false;
+                break;
+            }
+        }
+
+        for (i, letter) in answer.chars().enumerate() {
+            if let Some(known) = info.known[i] {
+                if known != letter {
+                    valid = false;
+                    break;
+                }
+            }
+        }
+
+        if valid {
+            remaining.push(answer);
+        }
+    }
+    remaining
 }
 
 // Returns a list of possible words it could still be for a given guess
@@ -186,7 +291,7 @@ fn create_worker(
     })
 }
 
-fn best_starting_guesses(
+fn best_guesses(
     thread_count: i32,
     words: &Vec<&'static str>,
     answers: &Vec<&'static str>
@@ -224,6 +329,22 @@ fn best_starting_guesses(
     top_results
 }
 
+fn print_guesses(guesses: &Vec<Guess>) {
+    let mut count = 0;
+    while count < 17 {
+        if guesses.len() > count + 3 {
+            println!(
+                "{}, {}, {}, {}",
+                guesses[count].guess,
+                guesses[count + 1].guess,
+                guesses[count + 2].guess,
+                guesses[count + 3].guess,
+            );
+        }
+        count += 4;
+    }
+}
+
 fn main() {
     let start = SystemTime::now();
     let thread_count = 16;
@@ -232,24 +353,29 @@ fn main() {
     let answers: Vec<&'static str> = get_answers(); 
     println!("Welcome to the Wordle solver\n");
 
-    let top_results = best_starting_guesses(thread_count, &words, &answers);
+    let top_results = best_guesses(thread_count, &words, &answers);
     println!("Our analysis shows that the following are all great starting guesses\n");
     let mut count = 0;
-    while count < 17 {
-        if top_results.len() > count {
-            println!(
-                "{}, {}, {}, {}",
-                top_results[count].guess,
-                top_results[count + 1].guess,
-                top_results[count + 2].guess,
-                top_results[count + 3].guess,
-            );
-        }
-        count += 4;
-    }
+    print_guesses(&top_results);
 
-    println!("\nPlay wordle using one of these, then enter the information you learn after each guess");
-    
+    println!("\nPlay wordle using one of these, then enter the information you learn after each guess\n");
+
+    let mut num_answers = 1000;
+    let mut remaining_answers = answers;
+
+    while num_answers > 0 {
+        let state = prompt_user_for_new_state();
+        remaining_answers =  possible_remaining_answers(&remaining_answers, &state);
+        num_answers = remaining_answers.len();
+        println!("Num Possible Answers {}", remaining_answers.len());
+        if num_answers <= 5 {
+            for ans in remaining_answers.iter() {
+                println!("{}", ans);
+            }
+        }
+        let results = best_guesses(thread_count, &words, &remaining_answers);
+        print_guesses(&results);
+    }
 
     
     match start.elapsed() {

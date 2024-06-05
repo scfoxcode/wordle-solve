@@ -99,12 +99,6 @@ fn possible_remaining_answers(
 
     let mut remaining: Vec<&'static str> = Vec::new();
     for answer in answers.iter() {
-        if answer.to_string() == "slate" {
-            println!("YOLO");
-            println!("{:?}", info.excluded);
-            println!("{:?}", info.exists);
-            println!("{:?}", info.known);
-        }
         let mut valid = true;
         for letter in info.excluded.iter() {
             if answer.contains(*letter) {

@@ -1,7 +1,6 @@
 use std::thread;
 use std::io;
-use std::time::{Duration, SystemTime};
-use std::collections::HashMap;
+use std::time::{SystemTime};
 use std::sync::mpsc;
 use regex::Regex;
 
@@ -18,16 +17,18 @@ static ANSWERS_FILE: &'static str = include_str!("./answers.txt");
 // This needs to be smarter, as in exists but not in pos X
 #[derive(Clone)] 
 struct CurrentInfo {
-    pub exists: Vec<char>,
     pub excluded: Vec<char>,
+    pub somewhere: Vec<char>,
+    pub exists: [Option<char>; 5], 
     pub known: [Option<char>; 5]
 }
 
 impl CurrentInfo {
     fn new() -> Self {
         Self {
-            exists: Vec::new(),
             excluded: Vec::new(),
+            somewhere: Vec::new(),
+            exists: [None; 5],
             known: [None; 5],
         }
     }
@@ -40,9 +41,9 @@ fn prompt_user_for_new_state() -> CurrentInfo {
     println!("Please provide information about the current game state");
     println!("All information should be separated by spaces...");
     println!("- Eg: For the letter 'a' in position 2, enter 2a");
-    println!("- Eg: For the letter 'd' in an unknown position, enter d");
+    println!("- Eg: letter 'd' exists but not in position 4, enter !4d");
     println!("- Eg: If letter 'c' does not exist, enter !c");
-    println!("Full example: 1r 4s e t !x !p !r !y");
+    println!("Full example: 1r 4s !2e !x !p !3r !y");
 
     io::stdin().read_line(&mut known_letters_raw)
         .expect("failed to read known letters");
@@ -51,12 +52,12 @@ fn prompt_user_for_new_state() -> CurrentInfo {
     println!("Inputs {:?}", inputs);
     for input in inputs {
         let known = r"^([1-5])([a-z])";
-        let somewhere = r"^([a-z])";
+        let somewhere = r"^\!([1-5])([a-z])";
         let exclude = r"^\!([a-z])";
 
         let mut regex = Regex::new(known).unwrap();
 
-        // Ugh, this feels ugly
+        // Ugh, this feels ugly. And so many horrible unwraps
         if let Some(captures) = regex.captures(input) {
             if let Some(position) = captures.get(1) {
                 if let Some(letter) = captures.get(2) {
@@ -70,9 +71,14 @@ fn prompt_user_for_new_state() -> CurrentInfo {
 
         regex = Regex::new(somewhere).unwrap();
         if let Some(captures) = regex.captures(input) {
-            if let Some(letter) = captures.get(1) {
-                let letter: &str = letter.as_str();
-                info.exists.push(letter.chars().nth(0).unwrap());
+            if let Some(position) = captures.get(1) {
+                if let Some(letter) = captures.get(2) {
+                    // This might crash into next week with all these unwraps
+                    let pos: usize = position.as_str().parse::<usize>().unwrap() - 1;
+                    let letter: &str = letter.as_str();
+                    info.exists[pos] = letter.chars().nth(0); // Sneaky double use of option here
+                    info.somewhere.push(letter.chars().nth(0).unwrap());
+                }
             }
         }
 
@@ -110,10 +116,20 @@ fn possible_remaining_answers(
             }
         }
 
-        for letter in info.exists.iter() {
+        for letter in info.somewhere.iter() {
             if !answer.contains(*letter) {
                 valid = false;
                 break;
+            }
+        }
+
+        // Check word doesn't contain a somewhere letter in a disallowed location
+        for (i, letter) in answer.chars().enumerate() {
+            if let Some(not_here) = info.exists[i] {
+                if not_here == letter {
+                    valid = false;
+                    break;
+                }
             }
         }
 
@@ -131,41 +147,6 @@ fn possible_remaining_answers(
         }
     }
     remaining
-}
-
-// Returns a list of possible words it could still be for a given guess
-// Ignore correct letter, wrong position for now
-fn valid_remaining(guess: &str, answer: &str, words: &Vec<&str>) -> usize {
-    let mut count: usize = 0;
-    let mut correct_letters: [Option<char>; 5] = [None; 5];
-
-    for i in 0..5 {
-        if guess.chars().nth(i).unwrap() == answer.chars().nth(i).unwrap() {
-            correct_letters[i] = Some(guess.chars().nth(i).unwrap());
-        } else {
-            correct_letters[i] = None;
-        }
-    }
-
-    // To optimise this, take advantage of words being alphabetical
-    // And then check first letter to only iterate over correct subset
-    for i in 0..words.len() {
-        let word = words[i as usize];
-        let mut valid = true;
-        for j in 0..5 {
-            if let Some(letter) = correct_letters[j]  {
-                if letter != word.chars().nth(j).unwrap() {
-                    valid = false;
-                    break;
-                }
-            }
-        }
-        if valid {
-            count += 1;
-        }
-    }
-
-    count
 }
 
 #[derive(Clone, PartialOrd, PartialEq)] 
@@ -268,23 +249,6 @@ fn create_worker(
                 third.score = total;
                 third.guess = guess.to_string();
             }
-
-            /*
-
-            // Check specific guess
-            if guess.to_string() == "slate" {
-                println!("Slate score = {}", total);
-            }
-            if guess.to_string() == "arise" {
-                println!("Arise score = {}", total);
-            }
-            if guess.to_string() == "salet" {
-                println!("Salet score = {}", total);
-            }
-            if guess.to_string() == "soare" {
-                println!("Soare score = {}", total);
-            }
-            */
         }
 
         sender.send(vec![first, second, third]).unwrap();
@@ -331,6 +295,7 @@ fn best_guesses(
 
 fn print_guesses(guesses: &Vec<Guess>) {
     let mut count = 0;
+    println!("Best possible guesses");
     while count < 17 {
         if guesses.len() > count + 3 {
             println!(
@@ -355,7 +320,6 @@ fn main() {
 
     let top_results = best_guesses(thread_count, &words, &answers);
     println!("Our analysis shows that the following are all great starting guesses\n");
-    let mut count = 0;
     print_guesses(&top_results);
 
     println!("\nPlay wordle using one of these, then enter the information you learn after each guess\n");
@@ -368,13 +332,16 @@ fn main() {
         remaining_answers =  possible_remaining_answers(&remaining_answers, &state);
         num_answers = remaining_answers.len();
         println!("Num Possible Answers {}", remaining_answers.len());
-        if num_answers <= 5 {
-            for ans in remaining_answers.iter() {
-                println!("{}", ans);
+        for (i, ans) in remaining_answers.iter().enumerate() {
+            if i >= 5 {
+                println!("...\n");
+                break;
             }
+            println!("{}", *ans);
         }
         let results = best_guesses(thread_count, &words, &remaining_answers);
         print_guesses(&results);
+        println!("");
     }
 
     

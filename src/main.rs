@@ -162,24 +162,16 @@ impl Guess {
             score: 0.0,
         }
     }
-
-    fn print(&self) {
-        println!(
-            "Word: {} Score: {}", 
-            self.guess,
-            self.score,
-        );
-    }
 }
 
 fn get_words() -> Vec<&'static str> {
-    let mut words: Vec<&'static str> = WORD_FILE.split("\n").collect();
+    let mut words: Vec<&'static str> = WORD_FILE.split('\n').collect();
     words.pop();
     words
 }
 
 fn get_answers() -> Vec<&'static str> {
-    let mut words: Vec<&'static str> = ANSWERS_FILE.split("\n").collect();
+    let mut words: Vec<&'static str> = ANSWERS_FILE.split('\n').collect();
     words.pop();
     words
 }
@@ -205,7 +197,7 @@ fn create_worker(
         let mut third = Guess::new();
 
         let mut frequency = FrequencySet::new();
-        frequency.buildSetFromWords(&answers);
+        frequency.build_set_from_words(&answers);
 
         // Guess index is for the window. so this is wrong!!!
         for guess in window.iter() {
@@ -215,21 +207,21 @@ fn create_worker(
 
             let mut duplicates = FrequencyDistribution::new();
             for (j, char) in guess.chars().enumerate() { // 10 and 5
-                let is_duplicate = duplicates.charCount(char) > 0;
+                let is_duplicate = duplicates.char_count(char) > 0;
                 let score_specific = if is_duplicate { 6.0 } else { 15.0 };
                 let score_general = if is_duplicate { 4.0 } else { 12.0 };
                                                          
-                match frequency.distributionForIndex(j) {
+                match frequency.distribution_for_index(j) {
                     Ok(dist) => {
-                        specific += dist.charFrequency(char) * score_specific; // 26 magic number heuristic
+                        specific += dist.char_frequency(char) * score_specific; // 26 magic number heuristic
                     },
                     Err(err) => {
                         panic!("{}", err);
                     }
                 }
 
-                general += frequency.charFrequency(char) * score_general;
-                duplicates.incrementChar(char);
+                general += frequency.char_frequency(char) * score_general;
+                duplicates.increment_char(char);
             }
 
             let total = specific + general;

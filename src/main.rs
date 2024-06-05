@@ -4,8 +4,15 @@ use std::time::{Duration, SystemTime};
 use std::collections::HashMap;
 use std::sync::mpsc;
 
+mod freq;
+use freq::FrequencyDistribution;
+use freq::FrequencySet;
+use freq::Distribution;
+
 // static WORD_FILE: &'static str = include_str!("./wordlist-debug.txt");
-static WORD_FILE: &'static str = include_str!("./wordlist.txt");
+// The non raw wordlist is missing words like Slate
+static WORD_FILE: &'static str = include_str!("./wordlist-raw.txt");
+static ANSWERS_FILE: &'static str = include_str!("./answers.txt");
 
 fn prompt_user_for_new_state() {
     let mut known_letters_raw = String::new();
@@ -56,31 +63,25 @@ fn valid_remaining(guess: &str, answer: &str, words: &Vec<&str>) -> usize {
     count
 }
 
-#[derive(Clone)]
-struct GuessQuality {
-    pub guess_index: usize,
-    pub average: usize,
-    pub lowest: usize,
-    pub highest: usize 
+#[derive(Clone, PartialOrd, PartialEq)] 
+struct Guess {
+    pub guess: String,
+    pub score: f32,
 }
 
-impl GuessQuality {
-    fn new() -> Self {
+impl Guess {
+    pub fn new() -> Self {
         Self {
-            guess_index: 0,
-            average: 9999999,
-            lowest: 9999999,
-            highest: 0,
+            guess: "NO GUESS".to_string(),
+            score: 0.0,
         }
     }
 
-    fn print(&self, words: &Vec<&str>) {
+    fn print(&self) {
         println!(
-            "Word: {} Lowest: {} Average: {} Highest: {}", 
-            words[self.guess_index],
-            self.lowest,
-            self.average,
-            self.highest
+            "Word: {} Score: {}", 
+            self.guess,
+            self.score,
         );
     }
 }
@@ -88,72 +89,98 @@ impl GuessQuality {
 fn get_words() -> Vec<&'static str> {
     let mut words: Vec<&'static str> = WORD_FILE.split("\n").collect();
     words.pop();
-
-    let mut final_words: Vec<&str> = Vec::new();
-    let mut count = 0;
-    for word in words.iter() {
-        count += 1;
-        // OPTIMISATION TO PREVENT CORES MELTING. It's now going to take 8 times longer
-        // Multi threading a must for this.
-        /*
-        if count % 2 == 1 {
-            continue;
-        }
-        */
-        let mut chars_in_word: HashMap<char, bool> = HashMap::new();
-        let mut valid = true;
-        for i in 0..5 {
-            let syb = word.chars().nth(i).unwrap();
-            if chars_in_word.contains_key(&syb) {
-                valid = false;
-                break;
-            } 
-            chars_in_word.insert(syb, true);
-        }
-        if valid {
-            final_words.push(word);
-        }
-    }
-
-    final_words 
+    words
 }
 
-fn create_worker(raw_words: Vec<&'static str>, chunk: usize, num_chunks: usize, sender: mpsc::Sender<GuessQuality>) -> thread::JoinHandle<()> {
-    let words = raw_words.clone();
+fn get_answers() -> Vec<&'static str> {
+    let mut words: Vec<&'static str> = ANSWERS_FILE.split("\n").collect();
+    words.pop();
+    words
+}
+
+fn create_worker(
+    words: Vec<&'static str>,
+    answers: Vec<&'static str>,
+    chunk: usize,
+    num_chunks: usize,
+    sender: mpsc::Sender<Vec<Guess>>) -> thread::JoinHandle<()> {
+
 
     let chunk_size = words.len() / num_chunks;
 
 
     // Window into larger words list
-    let window = raw_words[(chunk * chunk_size)..(chunk_size * (chunk+1))].to_vec();
+    let window = words[(chunk * chunk_size)..(chunk_size * (chunk+1))].to_vec();
 
 
     thread::spawn(move || {
-        let mut first = GuessQuality::new();
+        let mut first = Guess::new();
+        let mut second = Guess::new();
+        let mut third = Guess::new();
 
-        for (i, guess) in window.iter().enumerate() {
-            let mut quality = GuessQuality::new();
-            quality.guess_index = i;
+        let mut frequency = FrequencySet::new();
+        frequency.buildSetFromWords(&answers);
 
-            for answer in &words {
-                let result = valid_remaining(guess, answer, &words);            
-                if result < quality.lowest {
-                    quality.lowest = result;
+        // Guess index is for the window. so this is wrong!!!
+        for guess in window.iter() {
+            // Calculate the score for guess
+            let mut specific: f32 = 0.0;
+            let mut general: f32 = 0.0;
+
+            let mut duplicates = FrequencyDistribution::new();
+            for (j, char) in guess.chars().enumerate() { // 10 and 5
+                let is_duplicate = duplicates.charCount(char) > 0;
+                let score_specific = if is_duplicate { 6.0 } else { 15.0 };
+                let score_general = if is_duplicate { 4.0 } else { 12.0 };
+                                                         
+                match frequency.distributionForIndex(j) {
+                    Ok(dist) => {
+                        specific += dist.charFrequency(char) * score_specific; // 26 magic number heuristic
+                    },
+                    Err(err) => {
+                        panic!("{}", err);
+                    }
                 }
-                if result > quality.highest {
-                    quality.highest = result;
-                }
-                quality.average += result;
+
+                general += frequency.charFrequency(char) * score_general;
+                duplicates.incrementChar(char);
             }
-            // quality.average = quality.average / (words.len() * words.len());
-            // quality.average = quality.average; // The actual avg doesn't even matter. Lowest sum wins
-            quality.average = quality.average / 10000;
-            if quality.average < first.average {
-                first = quality.clone();
+
+            let total = specific + general;
+            // Ugly but simple
+            if first.score < total {
+                third = second;
+                second = first;
+                first = Guess::new();
+                first.score = total;
+                first.guess = guess.to_string();
+            } else if second.score < total {
+                third = second;
+                second = Guess::new();
+                second.score = total;
+                second.guess = guess.to_string();
+            } else if third.score < total {
+                third.score = total;
+                third.guess = guess.to_string();
+            }
+
+
+            // Check specific guess
+            if guess.to_string() == "slate" {
+                println!("Slate score = {}", total);
+            }
+            if guess.to_string() == "arise" {
+                println!("Arise score = {}", total);
+            }
+            if guess.to_string() == "salet" {
+                println!("Salet score = {}", total);
+            }
+            if guess.to_string() == "soare" {
+                println!("Soare score = {}", total);
             }
         }
 
-        sender.send(first).unwrap();
+        sender.send(vec![first, second, third]).unwrap();
     })
 }
 
@@ -162,17 +189,20 @@ fn main() {
     let thread_count = 8;
 
     let words: Vec<&'static str> = get_words(); 
-    println!("Number of words in reduced list {}", words.len());
-    println!("Beginning Brutal calculation");
+    let answers: Vec<&'static str> = get_answers(); 
+    println!("Welcome to the Wordle solver");
 
-    let (tx, rx): (mpsc::Sender<GuessQuality>, mpsc::Receiver<GuessQuality>) = mpsc::channel();
+    let (tx, rx): (mpsc::Sender<Vec<Guess>>, mpsc::Receiver<Vec<Guess>>) = mpsc::channel();
     let mut handles = vec![];
+
     for i in 0..thread_count {
         let tx_clone = tx.clone();
         let words_clone = words.clone();
+        let answers_clone = answers.clone();
         handles.push(
             create_worker(
                 words_clone,
+                answers_clone,
                 i,
                 thread_count,
                 tx_clone
@@ -181,13 +211,20 @@ fn main() {
     }
 
     // Results from threads
+    let mut top_results: Vec<Guess> = Vec::new();
     for _ in 0..thread_count {
-        let quality = rx.recv().unwrap();
-        quality.print(&words);
+        let mut quality = rx.recv().unwrap();
+        top_results.append(&mut quality);
     }
+
+    top_results.sort_by(|a, b| b.score.partial_cmp(&a.score).expect("I HATE FLOATS"));
     
     for handle in handles {
         handle.join().unwrap();
+    }
+
+    for result in top_results {
+        result.print();
     }
     
     match start.elapsed() {

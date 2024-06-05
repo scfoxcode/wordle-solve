@@ -9,12 +9,9 @@ use freq::FrequencyDistribution;
 use freq::FrequencySet;
 use freq::Distribution;
 
-// static WORD_FILE: &'static str = include_str!("./wordlist-debug.txt");
-// The non raw wordlist is missing words like Slate
 static WORD_FILE: &'static str = include_str!("./wordlist-raw.txt");
 static ANSWERS_FILE: &'static str = include_str!("./answers.txt");
 
-// This needs to be smarter, as in exists but not in pos X
 #[derive(Clone)] 
 struct CurrentInfo {
     pub excluded: Vec<char>,

@@ -174,13 +174,9 @@ fn create_worker(
     num_chunks: usize,
     sender: mpsc::Sender<Vec<Guess>>) -> thread::JoinHandle<()> {
 
-
-    let chunk_size = words.len() / num_chunks;
-
-
     // Window into larger words list
+    let chunk_size = words.len() / num_chunks;
     let window = words[(chunk * chunk_size)..(chunk_size * (chunk+1))].to_vec();
-
 
     thread::spawn(move || {
         let mut first = Guess::new();
@@ -336,6 +332,4 @@ fn main() {
             println!("Error: {e:?}");
         }
     }
-
-
 }
